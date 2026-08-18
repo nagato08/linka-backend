@@ -44,12 +44,16 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 
-COPY --from=deps /app/node_modules ./node_modules
-COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/src/generated ./src/generated
-COPY --from=builder /app/prisma ./prisma
-COPY --from=builder /app/prisma.config.ts ./
-COPY package.json ./
+# --chown=node:node partout : `prisma migrate deploy` écrit dans
+# node_modules/@prisma/engines au démarrage (vérification des binaires), et
+# les fichiers copiés depuis les étapes précédentes appartiennent à root par
+# défaut. Sans ça, USER node ci-dessous ne peut plus rien écrire.
+COPY --from=deps --chown=node:node /app/node_modules ./node_modules
+COPY --from=builder --chown=node:node /app/dist ./dist
+COPY --from=builder --chown=node:node /app/src/generated ./src/generated
+COPY --from=builder --chown=node:node /app/prisma ./prisma
+COPY --from=builder --chown=node:node /app/prisma.config.ts ./
+COPY --chown=node:node package.json ./
 
 # Exécution sans privilèges : une faille dans une dépendance ne doit pas
 # donner les droits root dans le conteneur.
