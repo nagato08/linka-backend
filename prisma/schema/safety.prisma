@@ -1,0 +1,147 @@
+// ---------------------------------------------------------------------------
+// Sûreté et modération
+//
+// Ce domaine n'est pas une option : sans lui, les faux profils et le
+// harcèlement font fuir les utilisatrices, et l'application meurt. Il est
+// aussi une exigence explicite d'Apple et de Google pour la catégorie
+// rencontre — signalement, blocage et suppression de compte doivent exister
+// dans l'application.
+// ---------------------------------------------------------------------------
+
+model Report {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  reporterId     String @db.Uuid
+  reportedUserId String @db.Uuid
+
+  reason  ReportReason
+  details String?      @db.VarChar(1000)
+
+  /// Message incriminé, quand le signalement vise une conversation.
+  messageId    String?  @db.Uuid
+  /// Clés S3 des captures fournies par le signalant.
+  evidenceKeys String[]
+
+  status         ReportStatus        @default(OPEN)
+  resolvedById   String?             @db.Uuid
+  decision       ModerationDecision?
+  resolutionNote String?             @db.VarChar(500)
+
+  createdAt  DateTime  @default(now())
+  resolvedAt DateTime?
+
+  reporter        User             @relation("ReportReporter", fields: [reporterId], references: [id], onDelete: Cascade)
+  reportedUser    User             @relation("ReportReported", fields: [reportedUserId], references: [id], onDelete: Cascade)
+  resolvedBy      User?            @relation("ReportResolver", fields: [resolvedById], references: [id], onDelete: SetNull)
+  message         Message?         @relation(fields: [messageId], references: [id], onDelete: SetNull)
+  moderationTasks ModerationTask[]
+
+  @@index([reportedUserId, status])
+  @@index([status, createdAt])
+  @@map("reports")
+}
+
+/// Blocage mutuel et définitif : ni l'un ni l'autre n'apparaît plus dans le
+/// deck de son vis-à-vis, et toute conversation existante est fermée.
+model Block {
+  blockerId String @db.Uuid
+  blockedId String @db.Uuid
+
+  reason    String?  @db.VarChar(200)
+  createdAt DateTime @default(now())
+
+  blocker User @relation("BlockBlocker", fields: [blockerId], references: [id], onDelete: Cascade)
+  blocked User @relation("BlockBlocked", fields: [blockedId], references: [id], onDelete: Cascade)
+
+  @@id([blockerId, blockedId])
+  @@index([blockedId])
+  @@map("blocks")
+}
+
+/// Blocage par carnet d'adresses : les numéros importés ne verront jamais ce
+/// profil et ne seront jamais vus par lui.
+///
+/// Gratuit, et volontairement : dans un pays où les cercles sociaux sont
+/// serrés, tomber sur son cousin ou son collègue est un scénario réel et
+/// bloquant. C'est un argument d'installation, pas un argument d'abonnement.
+/// Seul le haché du numéro est conservé, jamais le carnet d'adresses.
+model ContactBlock {
+  id     String @id @default(uuid(7)) @db.Uuid
+  userId String @db.Uuid
+
+  /// SHA-256 poivré du numéro au format E.164, aligné sur User.phoneHash.
+  phoneHash String   @db.VarChar(64)
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, phoneHash])
+  @@index([phoneHash])
+  @@map("contact_blocks")
+}
+
+/// File de modération unifiée : photos, signalements, vérifications,
+/// profils à risque et événements passent tous par ici.
+model ModerationTask {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  type     ModerationTaskType
+  status   ModerationTaskStatus @default(QUEUED)
+  /// Plus la valeur est élevée, plus la tâche remonte dans la file.
+  priority Int                  @default(0)
+
+  subjectUserId  String? @db.Uuid
+  photoId        String? @db.Uuid
+  reportId       String? @db.Uuid
+  verificationId String? @db.Uuid
+  eventId        String? @db.Uuid
+
+  assignedToId String?             @db.Uuid
+  decision     ModerationDecision?
+  notes        String?             @db.VarChar(1000)
+
+  createdAt  DateTime  @default(now())
+  claimedAt  DateTime?
+  resolvedAt DateTime?
+
+  subjectUser  User?         @relation("ModerationTaskSubject", fields: [subjectUserId], references: [id], onDelete: Cascade)
+  assignedTo   User?         @relation("ModerationTaskAssignee", fields: [assignedToId], references: [id], onDelete: SetNull)
+  photo        Photo?        @relation(fields: [photoId], references: [id], onDelete: Cascade)
+  report       Report?       @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  verification Verification? @relation(fields: [verificationId], references: [id], onDelete: Cascade)
+  event        Event?        @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@index([status, priority(sort: Desc), createdAt])
+  @@index([type, status])
+  @@index([subjectUserId])
+  @@map("moderation_tasks")
+}
+
+/// Score de risque comportemental, recalculé en tâche de fond.
+///
+/// C'est le mécanisme le plus rentable de toute la pile anti-fraude : il
+/// n'appelle aucune API payante et attrape la grande majorité des comptes
+/// malveillants. Les signaux surveillés : taux de like proche de 100 %,
+/// médiane de swipe sous 400 ms, premier message en moins de 10 secondes,
+/// message identique envoyé à plusieurs matchs, liens sortants, ratio
+/// signalements/matchs élevé, sauts géographiques incohérents.
+///
+/// Au-delà du seuil, le compte est retiré des decks sans en être informé :
+/// un bannissement visible est contourné par une réinscription immédiate.
+model RiskScore {
+  userId String @id @db.Uuid
+
+  score   Int       @default(0)
+  level   RiskLevel @default(LOW)
+  /// Détail par signal, conservé pour expliquer une décision de modération.
+  signals Json?
+
+  shadowBannedAt DateTime?
+  reviewedAt     DateTime?
+  updatedAt      DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([level, score(sort: Desc)])
+  @@map("risk_scores")
+}

@@ -1,0 +1,112 @@
+// ---------------------------------------------------------------------------
+// Événements créés par les utilisateurs
+//
+// Le point de fuite d'une application de rencontre n'est pas le match, c'est
+// le passage du chat au réel : les conversations meurent avant le rendez-vous.
+// Un événement de groupe est bien moins engageant qu'un tête-à-tête, donc
+// bien plus souvent honoré. Il est aussi plus sûr, ce qui protège la
+// rétention féminine — et sur ce marché, où sortir seule avec un inconnu
+// rencontré en ligne est socialement lourd, c'est un vrai différenciateur.
+//
+// Aucune billetterie intégrée au départ : séquestre, remboursements, litiges
+// et absences représentent une complexité sans commune mesure avec le revenu
+// attendu. Le paiement se fait sur place ; la plateforme monétise la création
+// au-delà du quota et le parrainage d'événements.
+// ---------------------------------------------------------------------------
+
+model Event {
+  id          String @id @default(uuid(7)) @db.Uuid
+  organizerId String @db.Uuid
+
+  title       String        @db.VarChar(120)
+  description String        @db.VarChar(1500)
+  category    EventCategory
+
+  cityId        String? @db.Uuid
+  latitude      Float
+  longitude     Float
+  locationLabel String  @db.VarChar(200)
+
+  startsAt DateTime
+  endsAt   DateTime?
+
+  capacity   Int
+  /// Répartition imposée par genre. Sans elle, un événement se remplit
+  /// d'hommes en quelques minutes et n'a plus lieu d'être.
+  seatsWomen Int?
+  seatsMen   Int?
+
+  /// Coût annoncé à titre indicatif, réglé sur place. Unité mineure.
+  costAmount   Int?
+  currencyCode String? @db.Char(3)
+
+  status EventStatus @default(DRAFT)
+
+  coverKey String? @db.VarChar(255)
+
+  /// Événement sponsorisé par un établissement : meilleure marge du domaine.
+  isSponsored Boolean @default(false)
+  sponsorName String? @db.VarChar(100)
+  /// Mise en avant payante : visible au-delà du rayon habituel.
+  isPromoted  Boolean @default(false)
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  publishedAt DateTime?
+  cancelledAt DateTime?
+
+  organizer       User             @relation("EventOrganizer", fields: [organizerId], references: [id], onDelete: Cascade)
+  city            City?            @relation(fields: [cityId], references: [id], onDelete: SetNull)
+  currency        Currency?        @relation(fields: [currencyCode], references: [code])
+  requests        EventRequest[]
+  checkIns        EventCheckIn[]
+  conversation    Conversation?
+  moderationTasks ModerationTask[]
+
+  @@index([status, startsAt])
+  @@index([cityId, status, startsAt])
+  @@index([organizerId, createdAt(sort: Desc)])
+  @@map("events")
+}
+
+/// Demande de participation, validée par l'organisateur.
+model EventRequest {
+  id      String @id @default(uuid(7)) @db.Uuid
+  eventId String @db.Uuid
+  userId  String @db.Uuid
+
+  status  EventRequestStatus @default(PENDING)
+  message String?            @db.VarChar(300)
+
+  createdAt   DateTime  @default(now())
+  respondedAt DateTime?
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, userId])
+  @@index([userId, status])
+  @@index([eventId, status])
+  @@map("event_requests")
+}
+
+/// Présence confirmée sur place, contrôlée par géolocalisation.
+/// Alimente la réputation d'organisateur et pénalise les absences.
+model EventCheckIn {
+  id      String @id @default(uuid(7)) @db.Uuid
+  eventId String @db.Uuid
+  userId  String @db.Uuid
+
+  latitude  Float
+  longitude Float
+  /// Écart en mètres entre la position déclarée et le lieu de l'événement.
+  distanceM Int?
+
+  checkedInAt DateTime @default(now())
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, userId])
+  @@map("event_check_ins")
+}

@@ -1,0 +1,113 @@
+// ---------------------------------------------------------------------------
+// Notifications, traductions, journal d'audit
+// ---------------------------------------------------------------------------
+
+model Notification {
+  id     String @id @default(uuid(7)) @db.Uuid
+  userId String @db.Uuid
+
+  type    NotificationType
+  channel NotificationChannel @default(PUSH)
+
+  /// Clés de traduction, jamais du texte figé : le contenu est rendu dans la
+  /// langue de l'utilisateur au moment de l'envoi.
+  titleKey String @db.VarChar(100)
+  bodyKey  String @db.VarChar(100)
+  /// Variables d'interpolation et charge utile de navigation.
+  data     Json?
+
+  sentAt   DateTime?
+  readAt   DateTime?
+  failedAt DateTime?
+  error    String?   @db.VarChar(300)
+
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt, createdAt(sort: Desc)])
+  @@index([type, createdAt])
+  @@map("notifications")
+}
+
+model NotificationPreference {
+  userId String @id @db.Uuid
+
+  newMatch   Boolean @default(true)
+  newMessage Boolean @default(true)
+  newLike    Boolean @default(true)
+  events     Boolean @default(true)
+  marketing  Boolean @default(false)
+
+  /// Plage de silence, en minutes depuis minuit, fuseau de l'utilisateur.
+  quietHoursStart Int?
+  quietHoursEnd   Int?
+  timezone        String @default("Africa/Douala") @db.VarChar(50)
+
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("notification_preferences")
+}
+
+model PushToken {
+  id       String  @id @default(uuid(7)) @db.Uuid
+  userId   String  @db.Uuid
+  deviceId String? @db.Uuid
+
+  token    String         @unique @db.VarChar(255)
+  platform DevicePlatform
+
+  isActive   Boolean   @default(true)
+  lastUsedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  device Device? @relation(fields: [deviceId], references: [id], onDelete: SetNull)
+
+  @@index([userId, isActive])
+  @@map("push_tokens")
+}
+
+/// Contenus servis par l'API, en français et en anglais.
+/// Le Cameroun est officiellement bilingue : les régions du Nord-Ouest et du
+/// Sud-Ouest sont anglophones, l'anglais n'est pas une traduction de confort.
+model TranslationKey {
+  id  String @id @default(uuid(7)) @db.Uuid
+  key String @unique @db.VarChar(150)
+
+  namespace String @db.VarChar(50)
+  fr        String @db.Text
+  en        String @db.Text
+
+  updatedAt DateTime @updatedAt
+
+  @@index([namespace])
+  @@map("translation_keys")
+}
+
+/// Journal des actions sensibles : sanctions, décisions de modération,
+/// ajustements de crédits, accès administrateur aux données d'un compte.
+model AuditLog {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  actorId   String?   @db.Uuid
+  actorType ActorType @default(SYSTEM)
+
+  action     String  @db.VarChar(80)
+  entityType String  @db.VarChar(60)
+  entityId   String? @db.Uuid
+
+  before Json?
+  after  Json?
+
+  ipAddress String?  @db.Inet
+  createdAt DateTime @default(now())
+
+  actor User? @relation("AuditLogActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([entityType, entityId, createdAt(sort: Desc)])
+  @@index([actorId, createdAt(sort: Desc)])
+  @@map("audit_logs")
+}

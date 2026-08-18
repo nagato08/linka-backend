@@ -1,0 +1,24 @@
+// ---------------------------------------------------------------------------
+// Findr — Schéma Prisma (multi-fichiers)
+//
+// Cible      : PostgreSQL 16 + PostGIS + pgvector
+// Marché     : Cameroun (ouverture nationale) → Europe / Asie ensuite
+// Convention : camelCase côté client, snake_case en base
+//
+// Ce que Prisma ne sait pas exprimer vit dans la migration
+// 20260814020000_postgis_vector_constraints : colonne geography entretenue par
+// trigger, index GiST, index HNSW pgvector, contraintes CHECK, index partiels
+// et table d'archive des swipes.
+// ---------------------------------------------------------------------------
+
+generator client {
+  provider        = "prisma-client"
+  output          = "../../src/generated/prisma"
+  moduleFormat    = "cjs"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  extensions = [postgis, vector, pg_trgm, pgcrypto]
+}

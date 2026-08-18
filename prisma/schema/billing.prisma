@@ -1,0 +1,319 @@
+// ---------------------------------------------------------------------------
+// Monétisation
+//
+// Modèle principal : crédits achetés par mobile money, puis dépensés dans
+// l'application. Le prélèvement récurrent est quasi inexistant en mobile
+// money au Cameroun, ce qui disqualifie l'abonnement à renouvellement
+// automatique comme mécanique de base — il reste disponible via les stores.
+//
+// Tous les montants sont des ENTIERS en unité mineure de leur devise.
+// Le franc CFA n'a pas de sous-unité : supposer « × 100 » casserait toute la
+// comptabilité au passage à l'euro. D'où la table Currency et son facteur
+// d'échelle explicite.
+// ---------------------------------------------------------------------------
+
+model Currency {
+  /// ISO 4217. XAF au lancement.
+  code String @id @db.Char(3)
+
+  name           String @db.VarChar(50)
+  symbol         String @db.VarChar(8)
+  /// Nombre d'unités mineures dans une unité majeure.
+  /// XAF = 1 (aucune décimale), EUR = 100, USD = 100.
+  minorUnitScale Int    @default(1)
+
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  products       Product[]
+  paymentIntents PaymentIntent[]
+  purchases      Purchase[]
+  events         Event[]
+
+  @@map("currencies")
+}
+
+/// Catalogue. Un produit est soit acheté en argent réel, soit en crédits —
+/// jamais les deux à la fois, ce que garantit une contrainte CHECK.
+model Product {
+  id  String @id @default(uuid(7)) @db.Uuid
+  sku String @unique @db.VarChar(60)
+
+  type ProductType
+
+  titleFr       String  @db.VarChar(100)
+  titleEn       String  @db.VarChar(100)
+  descriptionFr String? @db.VarChar(300)
+  descriptionEn String? @db.VarChar(300)
+
+  /// Prix en argent réel, en unité mineure.
+  priceAmount  Int?
+  currencyCode String? @db.Char(3)
+
+  /// Prix en crédits, pour les produits achetés depuis le solde interne.
+  creditCost  Int?
+  /// Crédits accordés — renseigné pour les packs de crédits.
+  creditGrant Int?
+
+  /// Quantité livrée : nombre de super likes, de rewinds, de messages.
+  quantity        Int?
+  /// Durée pour les abonnements et les droits temporaires.
+  durationDays    Int?
+  /// Durée des boosts, exprimée en minutes : ils vont de 30 minutes à 24
+  /// heures, une granularité que les jours ne savent pas porter.
+  durationMinutes Int?
+  boostTier       BoostTier?
+  tier            SubscriptionTier?
+
+  /// Identifiants côté stores, pour la validation serveur des reçus.
+  googleProductId String? @db.VarChar(100)
+  appleProductId  String? @db.VarChar(100)
+
+  isActive  Boolean @default(true)
+  sortOrder Int     @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  currency       Currency?       @relation(fields: [currencyCode], references: [code])
+  paymentIntents PaymentIntent[]
+  purchases      Purchase[]
+
+  @@index([type, isActive, sortOrder])
+  @@map("products")
+}
+
+/// Tentative de paiement. Une ligne par essai, y compris les échecs.
+///
+/// En mobile money, l'utilisateur saisit son code PIN hors de l'application :
+/// l'état PENDING peut durer plusieurs minutes et se terminer sans que le
+/// webhook n'arrive jamais. Un job de réconciliation interroge donc
+/// l'agrégateur pour tous les intents non terminaux — sans lui, des paiements
+/// aboutis ne sont jamais crédités.
+model PaymentIntent {
+  id     String @id @default(uuid(7)) @db.Uuid
+  userId String @db.Uuid
+
+  productId String @db.Uuid
+
+  provider PaymentProviderKind
+  operator MobileMoneyOperator?
+
+  amount       Int
+  currencyCode String @db.Char(3)
+
+  status PaymentStatus @default(CREATED)
+
+  /// Référence de l'agrégateur (CinetPay, Hub2…) ou du store.
+  providerRef     String? @db.VarChar(120)
+  /// Payload brut du dernier webhook, conservé pour litige.
+  providerPayload Json?
+
+  /// Numéro débité, au format E.164. Peut différer du numéro du compte.
+  payerPhone String? @db.VarChar(20)
+
+  /// Fournie par le client. Empêche le double débit quand le réseau coupe
+  /// entre l'envoi et la réponse — cas fréquent ici.
+  idempotencyKey String @unique @db.VarChar(64)
+
+  failureCode    String? @db.VarChar(60)
+  failureMessage String? @db.VarChar(300)
+
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  expiresAt    DateTime?
+  completedAt  DateTime?
+  reconciledAt DateTime?
+
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  product  Product   @relation(fields: [productId], references: [id])
+  currency Currency  @relation(fields: [currencyCode], references: [code])
+  purchase Purchase?
+
+  @@index([userId, createdAt(sort: Desc)])
+  /// Requête du job de réconciliation.
+  @@index([status, createdAt])
+  @@index([providerRef])
+  @@map("payment_intents")
+}
+
+/// Achat abouti. Point d'entrée unique vers les crédits, les abonnements,
+/// les boosts et les droits.
+model Purchase {
+  id     String @id @default(uuid(7)) @db.Uuid
+  userId String @db.Uuid
+
+  productId       String  @db.Uuid
+  paymentIntentId String? @unique @db.Uuid
+
+  provider     PaymentProviderKind
+  amount       Int
+  currencyCode String              @db.Char(3)
+
+  /// Crédits effectivement portés au registre lors de cet achat.
+  creditsGranted Int @default(0)
+
+  /// Reçu du store, conservé pour la revalidation et les remboursements.
+  storeReceipt       String? @db.Text
+  storeTransactionId String? @unique @db.VarChar(120)
+
+  refundedAt   DateTime?
+  refundReason String?   @db.VarChar(200)
+  createdAt    DateTime  @default(now())
+
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  product       Product        @relation(fields: [productId], references: [id])
+  currency      Currency       @relation(fields: [currencyCode], references: [code])
+  paymentIntent PaymentIntent? @relation(fields: [paymentIntentId], references: [id])
+  ledgerEntries CreditLedger[]
+  subscription  Subscription?
+  boost         Boost?
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@map("purchases")
+}
+
+/// Registre de crédits en ajout seul. Le solde n'est jamais une colonne
+/// modifiable : il se recalcule et se prouve.
+///
+/// Sur un marché où les paiements échouent souvent et où les litiges
+/// remontent par WhatsApp, pouvoir reconstituer l'historique exact d'un
+/// compte n'est pas du luxe.
+model CreditLedger {
+  id     String @id @default(uuid(7)) @db.Uuid
+  userId String @db.Uuid
+
+  /// Positif au crédit, négatif au débit.
+  delta        Int
+  /// Solde après application, écrit dans la même transaction que le delta.
+  balanceAfter Int
+
+  reason LedgerReason
+
+  /// Objet à l'origine du mouvement : achat, boost, message payé, parrainage.
+  refType String? @db.VarChar(40)
+  refId   String? @db.Uuid
+
+  purchaseId String? @db.Uuid
+
+  /// Empêche qu'un webhook rejoué crédite deux fois.
+  idempotencyKey String? @unique @db.VarChar(64)
+
+  note      String?  @db.VarChar(200)
+  createdAt DateTime @default(now())
+
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  purchase Purchase? @relation(fields: [purchaseId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([refType, refId])
+  @@map("credit_ledger")
+}
+
+model Subscription {
+  id     String @id @default(uuid(7)) @db.Uuid
+  userId String @db.Uuid
+
+  tier   SubscriptionTier
+  status SubscriptionStatus @default(ACTIVE)
+
+  purchaseId String?             @unique @db.Uuid
+  provider   PaymentProviderKind
+
+  startedAt   DateTime  @default(now())
+  expiresAt   DateTime
+  /// Faux par défaut : en mobile money, le renouvellement est un réachat
+  /// volontaire, pas un prélèvement.
+  autoRenew   Boolean   @default(false)
+  /// Fenêtre de tolérance après un échec de renouvellement, pendant laquelle
+  /// les droits restent actifs.
+  graceUntil  DateTime?
+  cancelledAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  purchase Purchase? @relation(fields: [purchaseId], references: [id])
+
+  @@index([userId, status])
+  @@index([status, expiresAt])
+  @@map("subscriptions")
+}
+
+/// Droit effectif, découplé de sa source.
+///
+/// Un même droit peut venir d'un abonnement, d'un achat à l'unité, d'un quota
+/// gratuit ou d'un geste commercial. Le reste du code n'interroge que cette
+/// table : il n'a jamais à savoir d'où vient le droit.
+model Entitlement {
+  id     String @id @default(uuid(7)) @db.Uuid
+  userId String @db.Uuid
+
+  key    EntitlementKey
+  source EntitlementSource
+
+  /// Nul pour un droit illimité, décrémenté pour un droit consommable
+  /// (rewinds gratuits, usages du mode voyage, messages avant match).
+  remaining Int?
+
+  grantedAt DateTime  @default(now())
+  expiresAt DateTime?
+  revokedAt DateTime?
+
+  refType String? @db.VarChar(40)
+  refId   String? @db.Uuid
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, key, revokedAt])
+  @@index([expiresAt])
+  @@map("entitlements")
+}
+
+/// Mise en avant temporaire.
+///
+/// Un boost n'est pas magique : c'est un multiplicateur appliqué au score de
+/// classement du deck, plus une insertion garantie en tête chez les
+/// utilisateurs ciblés pendant la fenêtre.
+///
+/// Le nombre de boosts simultanés par ville est plafonné (City.boostSlots).
+/// Au-delà, la demande est mise en file plutôt que vendue : si tout le monde
+/// boost en même temps, plus personne n'est mis en avant et il faut
+/// rembourser.
+model Boost {
+  id     String @id @default(uuid(7)) @db.Uuid
+  userId String @db.Uuid
+
+  tier   BoostTier
+  status BoostStatus @default(QUEUED)
+
+  cityId     String? @db.Uuid
+  purchaseId String? @unique @db.Uuid
+
+  multiplier Float @default(3)
+
+  queuedAt DateTime  @default(now())
+  startAt  DateTime?
+  endAt    DateTime?
+
+  /// Restitués à l'utilisateur à la fin — c'est ce retour chiffré qui
+  /// déclenche le rachat, davantage que le boost lui-même.
+  impressions   Int @default(0)
+  profileViews  Int @default(0)
+  likesGained   Int @default(0)
+  matchesGained Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  city     City?     @relation(fields: [cityId], references: [id], onDelete: SetNull)
+  purchase Purchase? @relation(fields: [purchaseId], references: [id])
+
+  /// Requête d'ordonnancement de la file par zone.
+  @@index([cityId, status, queuedAt])
+  @@index([status, endAt])
+  @@index([userId, createdAt(sort: Desc)])
+  @@map("boosts")
+}

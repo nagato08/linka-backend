@@ -1,0 +1,31 @@
+// ---------------------------------------------------------------------------
+// Mode voyage
+//
+// Cinq usages gratuits, puis droit d'abonnement (TRAVEL_MODE).
+// L'historique est conservé pour deux raisons : décompter le quota gratuit,
+// et alimenter la détection de fraude — un compte qui saute de ville en ville
+// sans jamais activer le mode voyage a une géolocalisation falsifiée.
+// ---------------------------------------------------------------------------
+
+model TravelSession {
+  id     String @id @default(uuid(7)) @db.Uuid
+  userId String @db.Uuid
+
+  latitude      Float
+  longitude     Float
+  cityId        String? @db.Uuid
+  locationLabel String  @db.VarChar(150)
+
+  /// Faux dès que le quota de cinq est épuisé et qu'un droit prend le relais.
+  wasFree Boolean @default(true)
+
+  startedAt DateTime  @default(now())
+  endedAt   DateTime?
+
+  user User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  city City? @relation(fields: [cityId], references: [id], onDelete: SetNull)
+
+  @@index([userId, startedAt(sort: Desc)])
+  @@index([userId, endedAt])
+  @@map("travel_sessions")
+}

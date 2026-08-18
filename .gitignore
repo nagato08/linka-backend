@@ -1,0 +1,7 @@
+
+# Fichiers locaux
+.env
+
+# Client Prisma genere
+src/generated
+node_modules

@@ -1,0 +1,88 @@
+// ---------------------------------------------------------------------------
+// Vérification de profil
+//
+// Détection de vivacité puis comparaison faciale. La pose à reproduire est
+// tirée au sort à chaque tentative : sans cet aléa, une vidéo enregistrée à
+// l'avance suffit à passer le contrôle.
+//
+// La vérification n'est pas obligatoire — elle casserait le tunnel
+// d'inscription. Elle est rendue incontournable autrement : le deck
+// privilégie fortement les profils vérifiés, le filtre « vérifiés
+// uniquement » est gratuit, et seuls les vérifiés peuvent créer un
+// événement.
+// ---------------------------------------------------------------------------
+
+model Verification {
+  id     String @id @default(uuid(7)) @db.Uuid
+  userId String @db.Uuid
+
+  type   VerificationType   @default(LIVENESS_FACE_MATCH)
+  status VerificationStatus @default(PENDING)
+
+  /// Pose tirée au sort, transmise au client au démarrage de la session.
+  poseChallenge String @db.VarChar(50)
+
+  livenessScore Float?
+  matchScore    Float?
+
+  failureReason VerificationFailureReason?
+  attempts      Int                        @default(0)
+
+  /// Aucune vidéo n'est conservée. La capture est supprimée du stockage dès
+  /// le traitement terminé ; seul le vecteur facial survit.
+  captureKey   String? @db.VarChar(255)
+  captureWiped Boolean @default(false)
+
+  reviewedById String? @db.Uuid
+  reviewNote   String? @db.VarChar(500)
+
+  createdAt   DateTime  @default(now())
+  submittedAt DateTime?
+  processedAt DateTime?
+  expiresAt   DateTime
+
+  user            User             @relation("VerificationSubject", fields: [userId], references: [id], onDelete: Cascade)
+  reviewedBy      User?            @relation("VerificationReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+  embedding       FaceEmbedding?
+  moderationTasks ModerationTask[]
+
+  @@index([userId, status])
+  @@index([status, createdAt])
+  @@map("verifications")
+}
+
+/// Vecteur facial issu de la vérification.
+///
+/// Stocker le vecteur plutôt que l'image répond à deux besoins d'un coup :
+/// la conformité RGPD, et la détection de comptes multiples — un même visage
+/// rattaché à deux comptes est un signal fort, obtenu gratuitement une fois
+/// la vérification en place.
+///
+/// La colonne `vector` est ajoutée par migration SQL (pgvector) avec un index
+/// HNSW en distance cosinus : Prisma ne sait pas exprimer ce type.
+model FaceEmbedding {
+  id     String @id @default(uuid(7)) @db.Uuid
+  userId String @db.Uuid
+
+  verificationId String @unique @db.Uuid
+
+  /// Modèle et dimension, pour pouvoir migrer sans invalider l'historique.
+  model     String @db.VarChar(50)
+  dimension Int    @default(512)
+
+  /// vector(512), créée par la migration 20260814020000_postgis_vector_constraints. Requêtée en SQL brut.
+  embedding Unsupported("vector(512)")?
+
+  /// Renseigné quand un vecteur proche existe déjà sur un autre compte.
+  duplicateOfUserId String? @db.Uuid
+  duplicateDistance Float?
+
+  createdAt DateTime @default(now())
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  verification Verification @relation(fields: [verificationId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([duplicateOfUserId])
+  @@map("face_embeddings")
+}

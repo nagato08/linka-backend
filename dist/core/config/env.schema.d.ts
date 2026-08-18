@@ -1,0 +1,37 @@
+import { z } from 'zod';
+export declare const envSchema: z.ZodObject<{
+    NODE_ENV: z.ZodDefault<z.ZodEnum<{
+        development: "development";
+        test: "test";
+        production: "production";
+    }>>;
+    PORT: z.ZodDefault<z.ZodCoercedNumber<unknown>>;
+    DATABASE_URL: z.ZodURL;
+    REDIS_URL: z.ZodURL;
+    S3_ENDPOINT: z.ZodURL;
+    S3_ACCESS_KEY: z.ZodString;
+    S3_SECRET_KEY: z.ZodString;
+    S3_BUCKET: z.ZodString;
+    S3_REGION: z.ZodDefault<z.ZodString>;
+    S3_PUBLIC_URL: z.ZodURL;
+    S3_FORCE_PATH_STYLE: z.ZodPipe<z.ZodDefault<z.ZodString>, z.ZodTransform<boolean, string>>;
+    PHONE_HASH_PEPPER: z.ZodString;
+    FIELD_ENCRYPTION_KEY: z.ZodString;
+    RESEND_API_KEY: z.ZodDefault<z.ZodString>;
+    MAIL_FROM: z.ZodDefault<z.ZodString>;
+    REQUIRE_DEVICE_INTEGRITY: z.ZodPipe<z.ZodDefault<z.ZodString>, z.ZodTransform<boolean, string>>;
+    PLAY_INTEGRITY_PACKAGE_NAME: z.ZodDefault<z.ZodString>;
+    GOOGLE_SERVICE_ACCOUNT_B64: z.ZodDefault<z.ZodString>;
+    FIREBASE_PROJECT_ID: z.ZodDefault<z.ZodString>;
+    FIREBASE_SERVICE_ACCOUNT_B64: z.ZodDefault<z.ZodString>;
+    NOTCHPAY_PUBLIC_KEY: z.ZodDefault<z.ZodString>;
+    NOTCHPAY_PRIVATE_KEY: z.ZodDefault<z.ZodString>;
+    NOTCHPAY_WEBHOOK_SECRET: z.ZodDefault<z.ZodString>;
+    APP_PUBLIC_URL: z.ZodDefault<z.ZodString>;
+    JWT_ACCESS_SECRET: z.ZodString;
+    JWT_REFRESH_SECRET: z.ZodString;
+    JWT_ACCESS_TTL: z.ZodDefault<z.ZodString>;
+    JWT_REFRESH_TTL: z.ZodDefault<z.ZodString>;
+}, z.core.$strip>;
+export type Env = z.infer<typeof envSchema>;
+export declare function validateEnv(raw: Record<string, unknown>): Env;

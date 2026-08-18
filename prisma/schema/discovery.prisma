@@ -1,0 +1,121 @@
+// ---------------------------------------------------------------------------
+// Swipes, matchs, rewinds
+//
+// Le deck lui-même n'est pas ici : il est pré-calculé et stocké dans Redis.
+// Interroger PostgreSQL à chaque swipe ne tient pas au-delà de quelques
+// milliers d'utilisateurs.
+// ---------------------------------------------------------------------------
+
+/// Table la plus sollicitée en écriture de tout le schéma : les swipes sont
+/// 10 à 100 fois plus nombreux que les interactions utiles.
+///
+/// La contrainte d'unicité (actorId, targetId) garantit la correction du
+/// matching et est donc conservée — ce qui exclut le partitionnement par date,
+/// une clé de partition devant faire partie de toute contrainte unique.
+/// La croissance est absorbée par archivage : au-delà de 90 jours, les PASS
+/// partent dans swipes_archive (voir la migration 20260814020000_postgis_vector_constraints). L'exclusion « déjà vu »
+/// en lecture chaude passe par un set Redis, jamais par cette table.
+model Swipe {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  actorId  String @db.Uuid
+  targetId String @db.Uuid
+
+  action SwipeAction
+  source SwipeSource @default(DECK)
+
+  /// Un swipe annulé est conservé mais neutralisé : il ne doit ni produire de
+  /// match, ni ré-exclure la cible du deck.
+  isRewound Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  actor  User @relation("SwipeActor", fields: [actorId], references: [id], onDelete: Cascade)
+  target User @relation("SwipeTarget", fields: [targetId], references: [id], onDelete: Cascade)
+
+  rewind Rewind?
+
+  @@unique([actorId, targetId])
+  /// Sert la détection de match et l'écran « qui m'a liké », gratuit ici.
+  @@index([targetId, action, createdAt(sort: Desc)])
+  @@index([actorId, createdAt(sort: Desc)])
+  @@map("swipes")
+}
+
+/// Match entre deux utilisateurs.
+///
+/// userAId < userBId est imposé par une contrainte CHECK en SQL, ce qui rend
+/// l'unicité de la paire réellement effective. Sans cet ordre, deux likes
+/// simultanés créent deux lignes et donc deux conversations.
+/// La création passe par une transaction sérialisable.
+model Match {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  userAId String @db.Uuid
+  userBId String @db.Uuid
+
+  status MatchStatus @default(ACTIVE)
+
+  /// Vrai si le match provient d'un SUPERLIKE, pour l'affichage.
+  fromSuperlike Boolean @default(false)
+
+  matchedAt         DateTime  @default(now())
+  lastInteractionAt DateTime?
+  /// Renseigné uniquement si le produit active les matchs à durée limitée.
+  expiresAt         DateTime?
+  unmatchedAt       DateTime?
+  unmatchedById     String?   @db.Uuid
+
+  userA        User          @relation("MatchUserA", fields: [userAId], references: [id], onDelete: Cascade)
+  userB        User          @relation("MatchUserB", fields: [userBId], references: [id], onDelete: Cascade)
+  unmatchedBy  User?         @relation("MatchUnmatchedBy", fields: [unmatchedById], references: [id], onDelete: SetNull)
+  conversation Conversation?
+
+  @@unique([userAId, userBId])
+  @@index([userAId, status, matchedAt(sort: Desc)])
+  @@index([userBId, status, matchedAt(sort: Desc)])
+  @@map("matches")
+}
+
+/// Annulation du dernier swipe. Dix gratuits, puis illimité pour les abonnés.
+/// Historisé pour distinguer le quota gratuit du droit payant, et pour
+/// détecter l'abus (rewind en boucle sur la même cible).
+model Rewind {
+  id      String @id @default(uuid(7)) @db.Uuid
+  userId  String @db.Uuid
+  swipeId String @unique @db.Uuid
+
+  /// Faux dès que le quota gratuit est épuisé et qu'un droit prend le relais.
+  wasFree   Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  swipe Swipe @relation(fields: [swipeId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@map("rewinds")
+}
+
+/// Archive des swipes anciens.
+///
+/// Déclarée ici plutôt que créée en SQL brut : tout objet absent du schéma
+/// Prisma est proposé à la suppression à chaque `migrate diff`, et une
+/// migration générée sans relecture l'effacerait.
+///
+/// Aucune clé étrangère volontairement : l'archive doit survivre à la
+/// suppression d'un compte, le temps de la fenêtre de conservation.
+model SwipeArchive {
+  id String @id @db.Uuid
+
+  actorId  String @db.Uuid
+  targetId String @db.Uuid
+
+  action SwipeAction
+  source SwipeSource
+
+  isRewound  Boolean
+  createdAt  DateTime
+  archivedAt DateTime @default(now())
+
+  @@index([actorId, createdAt(sort: Desc)])
+  @@map("swipes_archive")
+}

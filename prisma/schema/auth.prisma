@@ -1,0 +1,236 @@
+// ---------------------------------------------------------------------------
+// Identité, accès et parrainage
+// ---------------------------------------------------------------------------
+
+/// Compte technique. Tout ce qui relève de l'identité publique vit dans Profile.
+model User {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  // --- Identifiants ---------------------------------------------------------
+  /// Identifiant principal. L'ouverture d'un compte SMS exige une société
+  /// enregistrée et l'approbation d'un sender ID : l'e-mail permet de démarrer
+  /// sans ce délai.
+  ///
+  /// Contrepartie assumée : une adresse se crée à l'infini et gratuitement.
+  /// Le rempart anti-faux-comptes repose désormais sur l'attestation
+  /// d'intégrité de l'appareil et le plafond de comptes par appareil, pas sur
+  /// le coût d'obtention de l'identifiant.
+  email           String    @unique @db.VarChar(255)
+  emailVerifiedAt DateTime?
+
+  /// Facultatif jusqu'au premier paiement.
+  ///
+  /// Le mobile money le vérifie gratuitement : l'utilisateur saisit son code
+  /// PIN sur son propre téléphone, ce qui prouve qu'il contrôle la ligne aussi
+  /// bien qu'un OTP. Les comptes payants sont donc vérifiés par téléphone sans
+  /// qu'un seul SMS soit envoyé.
+  phone           String?   @unique @db.VarChar(20)
+  /// SHA-256 poivré du numéro. Sert au recoupement avec ContactBlock sans
+  /// jamais comparer de numéros en clair.
+  phoneHash       String?   @unique @db.VarChar(64)
+  phoneVerifiedAt DateTime?
+
+  /// Argon2id. Nul tant que l'utilisateur n'a pas défini de mot de passe.
+  passwordHash String? @db.VarChar(255)
+
+  authProvider AuthProvider @default(EMAIL)
+  providerUid  String?      @db.VarChar(255)
+
+  // --- État -----------------------------------------------------------------
+  status UserStatus @default(PENDING_PHONE)
+  role   UserRole   @default(USER)
+  locale AppLocale  @default(FR)
+
+  // --- Parrainage -----------------------------------------------------------
+  /// 6 caractères [A-Z0-9], généré à l'inscription.
+  referralCode String  @unique @db.VarChar(6)
+  referredById String? @db.Uuid
+
+  // --- Sanctions ------------------------------------------------------------
+  suspendedUntil DateTime?
+  bannedAt       DateTime?
+  banReason      String?   @db.VarChar(500)
+  shadowBannedAt DateTime?
+
+  // --- Cycle de vie ---------------------------------------------------------
+  lastActiveAt        DateTime?
+  /// Départ du délai RGPD de 30 jours avant purge définitive.
+  deletionRequestedAt DateTime?
+  deletedAt           DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  // --- Relations ------------------------------------------------------------
+  profile    Profile?
+  preference Preference?
+
+  referredBy User?  @relation("UserReferralTree", fields: [referredById], references: [id], onDelete: SetNull)
+  referrals  User[] @relation("UserReferralTree")
+
+  referralsGiven   Referral[] @relation("ReferralReferrer")
+  referralReceived Referral?  @relation("ReferralReferee")
+
+  sessions   Session[]
+  devices    Device[]
+  pushTokens PushToken[]
+
+  swipesGiven    Swipe[] @relation("SwipeActor")
+  swipesReceived Swipe[] @relation("SwipeTarget")
+
+  matchesAsA       Match[] @relation("MatchUserA")
+  matchesAsB       Match[] @relation("MatchUserB")
+  matchesUnmatched Match[] @relation("MatchUnmatchedBy")
+
+  rewinds Rewind[]
+
+  conversationMemberships ConversationParticipant[]
+  messagesSent            Message[]                 @relation("MessageSender")
+  messageReceipts         MessageReceipt[]
+
+  reportsMade     Report[] @relation("ReportReporter")
+  reportsReceived Report[] @relation("ReportReported")
+  reportsResolved Report[] @relation("ReportResolver")
+
+  blocksMade     Block[]        @relation("BlockBlocker")
+  blocksReceived Block[]        @relation("BlockBlocked")
+  contactBlocks  ContactBlock[]
+
+  moderationTasksSubject  ModerationTask[] @relation("ModerationTaskSubject")
+  moderationTasksAssigned ModerationTask[] @relation("ModerationTaskAssignee")
+  riskScore               RiskScore?
+
+  verifications         Verification[]  @relation("VerificationSubject")
+  verificationsReviewed Verification[]  @relation("VerificationReviewer")
+  faceEmbeddings        FaceEmbedding[]
+
+  paymentIntents PaymentIntent[]
+  purchases      Purchase[]
+  creditEntries  CreditLedger[]
+  subscriptions  Subscription[]
+  entitlements   Entitlement[]
+  boosts         Boost[]
+
+  travelSessions TravelSession[]
+
+  eventsOrganized Event[]        @relation("EventOrganizer")
+  eventRequests   EventRequest[]
+  eventCheckIns   EventCheckIn[]
+
+  notifications          Notification[]
+  notificationPreference NotificationPreference?
+
+  auditLogs AuditLog[] @relation("AuditLogActor")
+
+  @@index([status, lastActiveAt(sort: Desc)])
+  @@index([referredById])
+  @@index([deletionRequestedAt])
+  @@map("users")
+}
+
+/// Une session par couple appareil / connexion. Le refresh token est stocké
+/// haché : une fuite de base ne permet pas de rejouer une session.
+model Session {
+  id     String @id @default(uuid(7)) @db.Uuid
+  userId String @db.Uuid
+
+  refreshTokenHash String    @unique @db.VarChar(64)
+  deviceId         String?   @db.Uuid
+  ipAddress        String?   @db.Inet
+  userAgent        String?   @db.VarChar(500)
+  expiresAt        DateTime
+  revokedAt        DateTime?
+  revokedReason    String?   @db.VarChar(100)
+  lastUsedAt       DateTime  @default(now())
+  createdAt        DateTime  @default(now())
+
+  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  device Device? @relation(fields: [deviceId], references: [id], onDelete: SetNull)
+
+  @@index([userId, revokedAt])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+/// Appareil physique. Support de l'attestation d'intégrité et du plafond de
+/// comptes par appareil — le levier anti-fake le plus rentable de la pile.
+model Device {
+  id     String @id @default(uuid(7)) @db.Uuid
+  userId String @db.Uuid
+
+  platform    DevicePlatform
+  /// Empreinte stable côté client (Android ID / IDFV, haché).
+  fingerprint String         @db.VarChar(64)
+
+  model      String? @db.VarChar(100)
+  osVersion  String? @db.VarChar(50)
+  appVersion String? @db.VarChar(20)
+
+  integrityVerdict   IntegrityVerdict @default(UNEVALUATED)
+  integrityCheckedAt DateTime?
+  /// Réponse brute de Play Integrity / DeviceCheck, conservée pour audit.
+  integrityPayload   Json?
+
+  isTrusted   Boolean  @default(false)
+  firstSeenAt DateTime @default(now())
+  lastSeenAt  DateTime @default(now())
+
+  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sessions   Session[]
+  pushTokens PushToken[]
+
+  @@unique([userId, fingerprint])
+  /// Non unique : l'index sert à compter les comptes ouverts depuis un même
+  /// appareil et à déclencher un signal de risque au-delà du seuil.
+  @@index([fingerprint])
+  @@map("devices")
+}
+
+/// Code à usage unique. Le code n'est jamais stocké en clair.
+model OtpCode {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  /// Adresse e-mail ou numéro E.164, selon le canal. Un seul champ plutôt que
+  /// deux colonnes exclusives : la logique de vérification est identique, seul
+  /// le transport change.
+  identifier String     @db.VarChar(255)
+  channel    OtpChannel @default(EMAIL)
+  purpose    OtpPurpose
+  codeHash   String     @db.VarChar(64)
+
+  attempts    Int @default(0)
+  maxAttempts Int @default(5)
+
+  consumedAt DateTime?
+  expiresAt  DateTime
+  ipAddress  String?   @db.Inet
+  createdAt  DateTime  @default(now())
+
+  @@index([identifier, purpose, createdAt(sort: Desc)])
+  @@index([expiresAt])
+  @@map("otp_codes")
+}
+
+/// Événement de parrainage. Sert la récompense, mais surtout le graphe de
+/// confiance : une branche qui produit des comptes bannis fait tomber son
+/// parrain et déclenche le réaudit de toute la descendance.
+model Referral {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  referrerId String @db.Uuid
+  refereeId  String @unique @db.Uuid
+  code       String @db.VarChar(6)
+
+  status        ReferralStatus @default(PENDING)
+  rewardCredits Int            @default(0)
+  qualifiedAt   DateTime?
+  rewardedAt    DateTime?
+  revokedAt     DateTime?
+  revokedReason String?        @db.VarChar(200)
+  createdAt     DateTime       @default(now())
+
+  referrer User @relation("ReferralReferrer", fields: [referrerId], references: [id], onDelete: Cascade)
+  referee  User @relation("ReferralReferee", fields: [refereeId], references: [id], onDelete: Cascade)
+
+  @@index([referrerId, status])
+  @@map("referrals")
+}

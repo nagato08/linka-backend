@@ -1,0 +1,113 @@
+// ---------------------------------------------------------------------------
+// Messagerie
+//
+// Conçue pour un réseau instable : hors des grandes villes, la 3G coupe.
+// Chaque message porte une clé d'idempotence produite par le client ; un
+// renvoi après coupure ne crée jamais de doublon. La reprise se fait par
+// rejeu depuis le dernier identifiant reçu.
+// ---------------------------------------------------------------------------
+
+model Conversation {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  type   ConversationType
+  status ConversationStatus @default(ACTIVE)
+
+  /// Exactement l'un des deux est renseigné, garanti par une contrainte CHECK.
+  matchId String? @unique @db.Uuid
+  eventId String? @unique @db.Uuid
+
+  /// Dénormalisés pour lister les conversations sans jointure ni agrégat.
+  lastMessageAt      DateTime?
+  lastMessagePreview String?   @db.VarChar(120)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  closedAt  DateTime?
+
+  match        Match?                    @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  event        Event?                    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  participants ConversationParticipant[]
+  messages     Message[]
+
+  @@index([status, lastMessageAt(sort: Desc)])
+  @@map("conversations")
+}
+
+model ConversationParticipant {
+  conversationId String @db.Uuid
+  userId         String @db.Uuid
+
+  joinedAt    DateTime  @default(now())
+  lastReadAt  DateTime?
+  /// Compteur entretenu à l'écriture : le calculer à la lecture coûte trop
+  /// cher sur la liste des conversations.
+  unreadCount Int       @default(0)
+  mutedUntil  DateTime?
+  leftAt      DateTime?
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([conversationId, userId])
+  @@index([userId, leftAt])
+  @@map("conversation_participants")
+}
+
+model Message {
+  id             String @id @default(uuid(7)) @db.Uuid
+  conversationId String @db.Uuid
+  senderId       String @db.Uuid
+
+  type   MessageType   @default(TEXT)
+  status MessageStatus @default(SENT)
+
+  body          String? @db.VarChar(2000)
+  /// Clé S3 pour les messages image ou audio.
+  mediaKey      String? @db.VarChar(255)
+  mediaMimeType String? @db.VarChar(100)
+  mediaBytes    Int?
+  /// Durée en secondes pour les notes vocales.
+  mediaDuration Int?
+
+  /// Identifiant généré par le client. Rend l'envoi rejouable sans doublon
+  /// après une coupure réseau — indispensable ici, pas un raffinement.
+  clientKey String @db.VarChar(64)
+
+  replyToId String? @db.Uuid
+
+  /// Renseigné quand le message a été payé avant match.
+  isPaidIntro Boolean @default(false)
+
+  createdAt DateTime  @default(now())
+  editedAt  DateTime?
+  deletedAt DateTime?
+
+  conversation Conversation     @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender       User             @relation("MessageSender", fields: [senderId], references: [id], onDelete: Cascade)
+  replyTo      Message?         @relation("MessageReplies", fields: [replyToId], references: [id], onDelete: SetNull)
+  replies      Message[]        @relation("MessageReplies")
+  receipts     MessageReceipt[]
+  reports      Report[]
+
+  @@unique([conversationId, senderId, clientKey])
+  @@index([conversationId, createdAt(sort: Desc)])
+  @@index([senderId, createdAt(sort: Desc)])
+  @@map("messages")
+}
+
+/// Accusés de réception et de lecture, par destinataire.
+model MessageReceipt {
+  messageId String @db.Uuid
+  userId    String @db.Uuid
+
+  deliveredAt DateTime?
+  readAt      DateTime?
+
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([messageId, userId])
+  @@index([userId, readAt])
+  @@map("message_receipts")
+}

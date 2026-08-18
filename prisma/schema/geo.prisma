@@ -1,0 +1,45 @@
+// ---------------------------------------------------------------------------
+// Géographie
+//
+// L'ouverture est nationale (Cameroun entier). La densité, elle, est locale :
+// le deck part d'un rayon serré et s'élargit automatiquement jusqu'à trouver
+// assez de candidats. Les villes servent de zones nommées, de compteurs
+// publics et d'unité de quota pour les boosts.
+// ---------------------------------------------------------------------------
+
+model City {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  name    String @db.VarChar(100)
+  region  String @db.VarChar(100)
+  /// ISO 3166-1 alpha-2. CM au lancement.
+  country String @db.Char(2)
+
+  latitude  Float
+  longitude Float
+  /// Rayon par défaut utilisé pour rattacher un profil à cette ville.
+  radiusKm  Int   @default(25)
+
+  /// Dénormalisé, rafraîchi par tâche planifiée. Alimente le compteur public
+  /// « 340 personnes à Bafoussam », qui motive le parrainage.
+  activeUserCount Int     @default(0)
+  /// Nombre de boosts simultanés autorisés dans la zone. Au-delà, mise en
+  /// file d'attente : sans ce plafond, les boosts se diluent et perdent
+  /// toute valeur dès qu'ils sont nombreux.
+  boostSlots      Int     @default(3)
+  isActive        Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  profiles       Profile[]
+  boosts         Boost[]
+  events         Event[]
+  travelSessions TravelSession[]
+
+  @@unique([country, region, name])
+  @@index([country, isActive])
+  /// Recherche de ville tolérante aux fautes de frappe.
+  @@index([name(ops: raw("gin_trgm_ops"))], map: "cities_name_trgm_idx", type: Gin)
+  @@map("cities")
+}

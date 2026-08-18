@@ -1,0 +1,549 @@
+// ---------------------------------------------------------------------------
+// Énumérations
+// ---------------------------------------------------------------------------
+
+// --- Identité & accès -------------------------------------------------------
+
+enum UserStatus {
+  PENDING_PHONE // identifiant non encore vérifié
+  PENDING_PROFILE // vérifié, profil incomplet
+  ACTIVE
+  SUSPENDED // sanction temporaire, l'utilisateur en est informé
+  SHADOW_BANNED // retiré des decks, l'utilisateur ne le sait pas
+  BANNED
+  DELETION_PENDING // purge programmée à J+30
+  DELETED
+
+  @@map("user_status")
+}
+
+enum UserRole {
+  USER
+  MODERATOR
+  ADMIN
+
+  @@map("user_role")
+}
+
+enum AppLocale {
+  FR
+  EN
+
+  @@map("app_locale")
+}
+
+enum AuthProvider {
+  EMAIL
+  PHONE
+  GOOGLE
+  APPLE
+
+  @@map("auth_provider")
+}
+
+/// Canal d'acheminement du code à usage unique.
+enum OtpChannel {
+  EMAIL
+  SMS
+
+  @@map("otp_channel")
+}
+
+enum OtpPurpose {
+  SIGNUP
+  LOGIN
+  PHONE_CHANGE
+  ACCOUNT_RECOVERY
+
+  @@map("otp_purpose")
+}
+
+enum DevicePlatform {
+  ANDROID
+  IOS
+  WEB
+
+  @@map("device_platform")
+}
+
+/// Verdict Play Integrity (Android) / DeviceCheck (iOS).
+/// Premier rempart anti-fake : il coupe la création automatisée à la racine.
+enum IntegrityVerdict {
+  PASS
+  FAIL
+  UNEVALUATED
+
+  @@map("integrity_verdict")
+}
+
+enum ReferralStatus {
+  PENDING // filleul inscrit, profil non complété
+  QUALIFIED // filleul actif → récompense due
+  REWARDED
+  REVOKED // fraude détectée sur la branche
+
+  @@map("referral_status")
+}
+
+// --- Profil -----------------------------------------------------------------
+
+enum Gender {
+  WOMAN
+  MAN
+  NON_BINARY
+  OTHER
+
+  @@map("gender")
+}
+
+/// Catégorie sous laquelle le profil est proposé aux autres.
+/// Indispensable : sans elle, NON_BINARY et OTHER ne seraient visibles
+/// que des utilisateurs ayant explicitement coché EVERYONE.
+enum MatchingBucket {
+  WOMEN
+  MEN
+  EVERYONE
+
+  @@map("matching_bucket")
+}
+
+enum SeekingTarget {
+  WOMEN
+  MEN
+  EVERYONE
+
+  @@map("seeking_target")
+}
+
+enum Intention {
+  LOVE
+  FRIENDSHIP
+  FUN
+  DATING
+
+  @@map("intention")
+}
+
+enum Religion {
+  CHRISTIAN_CATHOLIC
+  CHRISTIAN_PROTESTANT
+  CHRISTIAN_OTHER
+  MUSLIM
+  TRADITIONAL
+  BUDDHIST
+  HINDU
+  JEWISH
+  AGNOSTIC
+  ATHEIST
+  OTHER
+  PREFER_NOT_TO_SAY
+
+  @@map("religion")
+}
+
+enum EducationLevel {
+  NONE
+  PRIMARY
+  SECONDARY
+  VOCATIONAL
+  BACHELOR
+  MASTER
+  DOCTORATE
+  OTHER
+
+  @@map("education_level")
+}
+
+enum Frequency {
+  NEVER
+  SOMETIMES
+  OFTEN
+
+  @@map("frequency")
+}
+
+enum PhotoStatus {
+  PENDING
+  APPROVED
+  REJECTED
+
+  @@map("photo_status")
+}
+
+enum PhotoRejectionReason {
+  NSFW
+  VIOLENCE
+  SUSPECTED_MINOR
+  DUPLICATE // pHash déjà rattaché à un autre compte
+  STOLEN // retrouvée sur le web
+  AI_GENERATED
+  NO_FACE
+  LOW_QUALITY
+  OTHER
+
+  @@map("photo_rejection_reason")
+}
+
+// --- Découverte & matching --------------------------------------------------
+
+enum SwipeAction {
+  LIKE
+  PASS
+  SUPERLIKE
+
+  @@map("swipe_action")
+}
+
+enum SwipeSource {
+  DECK
+  LIKES_RECEIVED
+  EVENT
+  PROFILE_DIRECT
+
+  @@map("swipe_source")
+}
+
+enum MatchStatus {
+  ACTIVE
+  UNMATCHED
+  BLOCKED
+  EXPIRED
+
+  @@map("match_status")
+}
+
+// --- Messagerie -------------------------------------------------------------
+
+enum ConversationType {
+  MATCH
+  EVENT
+
+  @@map("conversation_type")
+}
+
+enum ConversationStatus {
+  ACTIVE
+  ARCHIVED
+  CLOSED
+
+  @@map("conversation_status")
+}
+
+enum MessageType {
+  TEXT
+  IMAGE
+  AUDIO
+  SYSTEM
+
+  @@map("message_type")
+}
+
+enum MessageStatus {
+  SENT
+  DELIVERED
+  READ
+  DELETED
+
+  @@map("message_status")
+}
+
+// --- Sûreté -----------------------------------------------------------------
+
+enum ReportReason {
+  FAKE_PROFILE
+  HARASSMENT
+  NUDITY
+  SCAM_MONEY
+  UNDERAGE
+  VIOLENCE
+  SPAM
+  OFF_PLATFORM // pousse vers WhatsApp / Telegram dès le premier message
+  OTHER
+
+  @@map("report_reason")
+}
+
+enum ReportStatus {
+  OPEN
+  REVIEWING
+  ACTIONED
+  DISMISSED
+
+  @@map("report_status")
+}
+
+enum ModerationTaskType {
+  PHOTO_REVIEW
+  REPORT_REVIEW
+  VERIFICATION_REVIEW
+  RISK_REVIEW
+  EVENT_REVIEW
+
+  @@map("moderation_task_type")
+}
+
+enum ModerationTaskStatus {
+  QUEUED
+  IN_REVIEW
+  RESOLVED
+  ESCALATED
+
+  @@map("moderation_task_status")
+}
+
+enum ModerationDecision {
+  APPROVE
+  REJECT
+  WARN
+  SHADOW_BAN
+  SUSPEND
+  BAN
+  NO_ACTION
+
+  @@map("moderation_decision")
+}
+
+enum RiskLevel {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+
+  @@map("risk_level")
+}
+
+// --- Vérification -----------------------------------------------------------
+
+enum VerificationType {
+  LIVENESS_FACE_MATCH
+  ID_DOCUMENT
+
+  @@map("verification_type")
+}
+
+enum VerificationStatus {
+  PENDING
+  PROCESSING
+  MANUAL_REVIEW
+  APPROVED
+  REJECTED
+  EXPIRED
+
+  @@map("verification_status")
+}
+
+enum VerificationFailureReason {
+  LIVENESS_FAILED
+  FACE_MISMATCH
+  DUPLICATE_FACE // ce visage est déjà rattaché à un autre compte
+  POOR_QUALITY
+  CHALLENGE_NOT_PERFORMED
+  TIMEOUT
+  MANUAL_REJECT
+
+  @@map("verification_failure_reason")
+}
+
+// --- Monétisation -----------------------------------------------------------
+
+enum ProductType {
+  CREDIT_PACK
+  SUBSCRIPTION
+  BOOST
+  SUPERLIKE_PACK
+  MESSAGE_BEFORE_MATCH
+  REWIND_PACK
+  EVENT_SLOT
+
+  @@map("product_type")
+}
+
+enum PaymentProviderKind {
+  MOBILE_MONEY
+  IAP_GOOGLE
+  IAP_APPLE
+  STRIPE
+  MANUAL // crédit accordé par un administrateur
+
+  @@map("payment_provider_kind")
+}
+
+enum MobileMoneyOperator {
+  MTN_MOMO
+  ORANGE_MONEY
+
+  @@map("mobile_money_operator")
+}
+
+/// Machine à états d'un paiement.
+/// En mobile money, PENDING et EXPIRED sont des états normaux et fréquents,
+/// pas des anomalies : l'utilisateur doit saisir son code PIN hors de l'app.
+/// Un job de réconciliation rattrape les transactions restées en suspens.
+enum PaymentStatus {
+  CREATED
+  PENDING // en attente de la saisie du PIN par l'utilisateur
+  PROCESSING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+  EXPIRED
+  REFUNDED
+
+  @@map("payment_status")
+}
+
+enum LedgerReason {
+  PURCHASE
+  SPEND
+  REFUND
+  REVERSAL
+  BONUS_SIGNUP
+  BONUS_REFERRAL
+  BONUS_PROMO
+  ADMIN_ADJUST
+  EXPIRY
+
+  @@map("ledger_reason")
+}
+
+enum SubscriptionTier {
+  FREE
+  PLUS
+  GOLD
+
+  @@map("subscription_tier")
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  GRACE // échec de renouvellement, droits maintenus quelques jours
+  EXPIRED
+  CANCELLED
+
+  @@map("subscription_status")
+}
+
+enum EntitlementKey {
+  // Droits d'abonnement : illimités tant que la formule court.
+  UNLIMITED_REWIND
+  NO_ADS
+  INCOGNITO
+  TRAVEL_MODE
+  ADVANCED_FILTERS
+  PRIORITY_DECK
+
+  // Droits consommables : achetés à l'unité ou par pack, décomptés à l'usage.
+  //
+  // EXTRA_REWIND est distinct d'UNLIMITED_REWIND, et ce n'est pas un détail :
+  // les confondre reviendrait à offrir un avantage d'abonnement pour le prix
+  // d'un pack de dix.
+  SUPERLIKE
+  EXTRA_REWIND
+  MESSAGE_BEFORE_MATCH
+  EVENT_CREATION
+
+  @@map("entitlement_key")
+}
+
+enum EntitlementSource {
+  SUBSCRIPTION
+  PURCHASE
+  FREE_QUOTA
+  ADMIN_GRANT
+
+  @@map("entitlement_source")
+}
+
+enum BoostTier {
+  BOOST_30M
+  BOOST_1H
+  BOOST_3H
+  BOOST_6H
+  BOOST_12H
+  BOOST_24H
+
+  @@map("boost_tier")
+}
+
+enum BoostStatus {
+  QUEUED // slots de la zone saturés : mise en file plutôt que dilution
+  ACTIVE
+  COMPLETED
+  CANCELLED
+  REFUNDED
+
+  @@map("boost_status")
+}
+
+// --- Événements -------------------------------------------------------------
+
+enum EventCategory {
+  OUTING
+  SPORT
+  CULTURE
+  FOOD
+  MUSIC
+  GAMES
+  VOLUNTEER
+  OTHER
+
+  @@map("event_category")
+}
+
+enum EventStatus {
+  DRAFT
+  PENDING_REVIEW
+  PUBLISHED
+  FULL
+  CANCELLED
+  COMPLETED
+
+  @@map("event_status")
+}
+
+enum EventRequestStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+  CANCELLED
+  WAITLISTED
+
+  @@map("event_request_status")
+}
+
+// --- Système ----------------------------------------------------------------
+
+enum NotificationType {
+  NEW_MATCH
+  NEW_MESSAGE
+  NEW_LIKE
+  BOOST_STARTED
+  BOOST_ENDED
+  VERIFICATION_RESULT
+  EVENT_REQUEST
+  EVENT_ACCEPTED
+  EVENT_REMINDER
+  PAYMENT_RESULT
+  MODERATION
+  SYSTEM
+  MARKETING
+
+  @@map("notification_type")
+}
+
+enum NotificationChannel {
+  PUSH
+  IN_APP
+  EMAIL
+  SMS
+
+  @@map("notification_channel")
+}
+
+enum ActorType {
+  USER
+  ADMIN
+  SYSTEM
+
+  @@map("actor_type")
+}

@@ -1,0 +1,247 @@
+// ---------------------------------------------------------------------------
+// Profil public, médias, centres d'intérêt, prompts et préférences
+// ---------------------------------------------------------------------------
+
+/// Identité publique. Relation 1-1 avec User, la clé primaire est l'userId.
+///
+/// Pas de nom de famille : sur une application de rencontre, il n'apporte
+/// rien et expose l'utilisateur.
+model Profile {
+  userId String @id @db.Uuid
+
+  firstName String   @db.VarChar(50)
+  /// Vérification stricte des 18 ans côté serveur, jamais côté client.
+  birthdate DateTime @db.Date
+
+  // --- Genre et orientation -------------------------------------------------
+  gender         Gender
+  /// Libellé libre quand gender vaut OTHER.
+  genderLabel    String?         @db.VarChar(40)
+  /// Catégorie sous laquelle ce profil est proposé aux autres.
+  matchingBucket MatchingBucket
+  /// Ce que la personne cherche. Multiple.
+  seeking        SeekingTarget[]
+
+  /// Orientation sexuelle — DONNÉE SENSIBLE.
+  ///
+  /// Chiffrée au repos au niveau applicatif (AES-256-GCM), d'où le type
+  /// texte plutôt qu'une énumération. L'homosexualité est pénalisée au
+  /// Cameroun (art. 347-1 du Code pénal) : ce champ ne doit jamais sortir
+  /// dans une réponse d'API publique, un log, un export de support ou un
+  /// événement d'analytics. Facultatif, et sans aucune incitation à le
+  /// renseigner.
+  orientationEnc String? @db.Text
+
+  // --- Recherche ------------------------------------------------------------
+  /// Intention unique, conformément au parcours d'inscription.
+  intention Intention
+
+  // --- Descriptif -----------------------------------------------------------
+  bio        String? @db.VarChar(500)
+  heightCm   Int?
+  profession String? @db.VarChar(100)
+
+  hasChildren   Boolean?
+  childrenCount Int?
+  wantsChildren Boolean?
+
+  religion  Religion?
+  education EducationLevel?
+  smoking   Frequency?
+  drinking  Frequency?
+
+  /// Codes ISO 639-1. Le Cameroun est officiellement bilingue fr/en, et les
+  /// régions du Nord-Ouest et du Sud-Ouest sont anglophones : ce n'est pas un
+  /// détail cosmétique.
+  languages String[]
+
+  // --- Localisation ---------------------------------------------------------
+  /// Domicile déclaré, jamais écrasé par le mode voyage.
+  homeLatitude  Float?
+  homeLongitude Float?
+
+  /// Position effective utilisée par le deck : domicile, ou destination si un
+  /// TravelSession est actif. Synchronisée par la couche service, ce qui
+  /// laisse la recherche géographique sur une seule colonne indexée.
+  discoveryLatitude  Float?
+  discoveryLongitude Float?
+
+  /// Colonne générée par PostGIS à partir de discoveryLatitude/Longitude,
+  /// créée dans la migration SQL. Index GiST. Non exposée par Prisma Client :
+  /// les requêtes spatiales passent par du SQL brut.
+  discoveryLocation Unsupported("geography(Point, 4326)")?
+
+  cityId        String? @db.Uuid
+  locationLabel String? @db.VarChar(150)
+
+  // --- État ------------------------------------------------------------------
+  isVerified      Boolean @default(false)
+  /// 0-100. Pondère le classement du deck : un profil vide dessert tout le monde.
+  completionScore Int     @default(0)
+
+  /// Invisible dans les decks, sauf pour les personnes déjà likées.
+  incognito    Boolean @default(false)
+  hideAge      Boolean @default(false)
+  hideDistance Boolean @default(false)
+
+  lastDeckRefreshAt DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  user      User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  city      City?             @relation(fields: [cityId], references: [id], onDelete: SetNull)
+  photos    Photo[]
+  interests ProfileInterest[]
+  prompts   ProfilePrompt[]
+
+  @@index([cityId, isVerified])
+  @@index([matchingBucket, birthdate])
+  @@index([completionScore(sort: Desc)])
+  @@map("profiles")
+}
+
+/// Photo de profil. Six au maximum, ordre explicite.
+/// Le statut précède la publication : rien n'est visible avant modération.
+model Photo {
+  id        String @id @default(uuid(7)) @db.Uuid
+  profileId String @db.Uuid
+
+  /// Clé S3 de l'original. Les variantes (thumb 200 / card 720 / full 1080,
+  /// en WebP) sont dérivées et servies par le CDN — la data est chère ici.
+  storageKey String @db.VarChar(255)
+  /// Position dans le carrousel, 0 = photo principale.
+  position   Int
+
+  status          PhotoStatus           @default(PENDING)
+  rejectionReason PhotoRejectionReason?
+
+  /// Hash perceptuel 64 bits en hexadécimal. Une même photo réutilisée sur
+  /// deux comptes est détectée immédiatement, pour un coût nul.
+  phash  String? @db.VarChar(16)
+  width  Int?
+  height Int?
+  bytes  Int?
+
+  /// Scores renvoyés par la modération automatique, conservés pour arbitrage.
+  moderationScores Json?
+  moderatedAt      DateTime?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  profile         Profile          @relation(fields: [profileId], references: [userId], onDelete: Cascade)
+  moderationTasks ModerationTask[]
+
+  @@unique([profileId, position])
+  @@index([phash])
+  @@index([status, createdAt])
+  @@map("photos")
+}
+
+/// Référentiel des centres d'intérêt, bilingue.
+model Interest {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  slug    String  @unique @db.VarChar(50)
+  labelFr String  @db.VarChar(60)
+  labelEn String  @db.VarChar(60)
+  emoji   String? @db.VarChar(8)
+
+  category  String? @db.VarChar(40)
+  isActive  Boolean @default(true)
+  sortOrder Int     @default(0)
+
+  profiles ProfileInterest[]
+
+  @@index([isActive, sortOrder])
+  @@map("interests")
+}
+
+model ProfileInterest {
+  profileId  String @db.Uuid
+  interestId String @db.Uuid
+
+  createdAt DateTime @default(now())
+
+  profile  Profile  @relation(fields: [profileId], references: [userId], onDelete: Cascade)
+  interest Interest @relation(fields: [interestId], references: [id], onDelete: Cascade)
+
+  @@id([profileId, interestId])
+  @@index([interestId])
+  @@map("profile_interests")
+}
+
+/// Questions à trous. Bien plus engageantes qu'une biographie libre, et
+/// nettement plus difficiles à remplir pour un faux compte.
+model Prompt {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  slug   String @unique @db.VarChar(50)
+  textFr String @db.VarChar(150)
+  textEn String @db.VarChar(150)
+
+  category  String? @db.VarChar(40)
+  isActive  Boolean @default(true)
+  sortOrder Int     @default(0)
+
+  answers ProfilePrompt[]
+
+  @@index([isActive, sortOrder])
+  @@map("prompts")
+}
+
+model ProfilePrompt {
+  id        String @id @default(uuid(7)) @db.Uuid
+  profileId String @db.Uuid
+  promptId  String @db.Uuid
+
+  answer   String @db.VarChar(300)
+  position Int    @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  profile Profile @relation(fields: [profileId], references: [userId], onDelete: Cascade)
+  prompt  Prompt  @relation(fields: [promptId], references: [id], onDelete: Cascade)
+
+  @@unique([profileId, promptId])
+  @@unique([profileId, position])
+  @@map("profile_prompts")
+}
+
+/// Filtres de recherche. Séparés de Profile : ils changent souvent, sont lus
+/// à chaque construction de deck, et ne décrivent pas l'utilisateur.
+model Preference {
+  userId String @id @db.Uuid
+
+  minAge        Int @default(18)
+  maxAge        Int @default(60)
+  maxDistanceKm Int @default(50)
+
+  /// Filtres avancés — réservés aux abonnés (droit ADVANCED_FILTERS).
+  intentionFilter Intention[]
+  religionFilter  Religion[]
+  minHeightCm     Int?
+  maxHeightCm     Int?
+  hasChildren     Boolean?
+  smokingFilter   Frequency[]
+  drinkingFilter  Frequency[]
+  languagesFilter String[]
+
+  /// Gratuit et volontairement mis en avant : c'est le levier qui pousse à
+  /// se faire vérifier sans rendre la vérification obligatoire.
+  verifiedOnly Boolean @default(false)
+
+  /// Autorise l'élargissement automatique du rayon quand la zone est peu
+  /// dense. Sans lui, un utilisateur d'Ebolowa voit un deck vide en 48 h et
+  /// ne revient jamais.
+  allowRadiusExpansion Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("preferences")
+}
