@@ -19,7 +19,14 @@ export default defineConfig({
     // Base jetable utilisée par `migrate diff` pour rejouer l'historique des
     // migrations et le comparer au schéma. Sans elle, la commande refuse de
     // travailler à partir d'un dossier de migrations.
-    shadowDatabaseUrl: process.env.SHADOW_DATABASE_URL ?? '',
+    //
+    // La clé est omise plutôt que mise à vide quand la variable est absente :
+    // Prisma refuse une chaîne vide et fait échouer toute commande, y compris
+    // `migrate deploy` qui n'a pourtant aucun besoin de base jetable. C'est
+    // exactement le cas en production, où seule DATABASE_URL est définie.
+    ...(process.env.SHADOW_DATABASE_URL
+      ? { shadowDatabaseUrl: process.env.SHADOW_DATABASE_URL }
+      : {}),
   },
 
   migrations: {
