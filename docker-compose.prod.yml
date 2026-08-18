@@ -4,6 +4,11 @@
 #   docker compose -f docker-compose.prod.yml up -d --build
 #
 # Les secrets viennent d'un fichier .env.production non versionné.
+#
+# Nginx Proxy Manager fait le TLS devant, sur le réseau externe `web` partagé
+# avec les autres projets de l'hôte. Il joint les conteneurs par leur nom, pas
+# par un port publié sur l'hôte : `api` et `minio` doivent donc être sur ce
+# réseau, alors que postgres et redis restent strictement internes.
 # =============================================================================
 
 services:
@@ -14,14 +19,15 @@ services:
     container_name: linka-api
     restart: unless-stopped
     env_file: .env.production
-    ports:
-      # Écoute uniquement en local : Caddy ou Nginx assure le TLS devant.
-      # Exposer 3000 publiquement contournerait le pare-feu applicatif.
-      - '127.0.0.1:3000:3000'
+    networks:
+      - default
+      - web
     depends_on:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      minio:
         condition: service_healthy
     # Les migrations sont jouées avant le démarrage : un conteneur qui monte
     # sur un schéma périmé échoue de façon obscure, souvent en pleine requête.
@@ -70,6 +76,37 @@ services:
       timeout: 5s
       retries: 5
 
+  # Stockage objet, en attendant la bascule vers Cloudflare R2. L'API S3 est
+  # identique : migrer plus tard ne touchera que S3_ENDPOINT et les clés,
+  # jamais le code.
+  minio:
+    image: minio/minio:latest
+    container_name: linka-minio
+    restart: unless-stopped
+    env_file: .env.production
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY}
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ['CMD', 'mc', 'ready', 'local']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - default
+      - web
+    # Aucun port publié : Nginx Proxy Manager atteint `linka-minio:9000` sur
+    # le réseau `web`. La console d'administration (9001) n'est joignable que
+    # depuis ce même réseau interne, jamais exposée.
+
+networks:
+  web:
+    external: true
+
 volumes:
   postgres-data:
   redis-data:
+  minio-data:
