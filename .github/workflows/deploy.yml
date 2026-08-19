@@ -1,0 +1,123 @@
+# =============================================================================
+# Déploiement en production
+#
+# Déclenché après une CI verte sur main, ou à la main depuis l'onglet Actions.
+# L'image est construite sur le serveur : il a 11 Go de RAM libres, et pousser
+# 300 Mo d'image vers un registre à chaque commit coûterait plus de temps que
+# le build lui-même.
+# =============================================================================
+
+name: Déploiement
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  # Permet de rejouer un déploiement sans toucher au code — après une panne
+  # réseau, ou pour remonter la pile après une intervention sur le serveur.
+  workflow_dispatch:
+
+# Jamais deux déploiements en parallèle : ils se marcheraient dessus sur le
+# même dossier et la même base. Celui en cours va au bout.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Déployer sur le VPS
+    runs-on: ubuntu-latest
+    # Un déclenchement manuel n'a pas de workflow_run associé : sans cette
+    # seconde condition, il serait systématiquement ignoré.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+
+    environment:
+      name: production
+      url: https://api.linka.tadjo.dev
+
+    steps:
+      - name: Préparer la clé SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          # L'empreinte de l'hôte est épinglée : sans elle, il faudrait
+          # désactiver la vérification, et un détournement DNS suffirait à
+          # rediriger le déploiement — clés et secrets compris.
+          echo "${{ secrets.DEPLOY_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Déployer
+        env:
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          USER: ${{ secrets.DEPLOY_USER }}
+          APP_DIR: ${{ secrets.DEPLOY_PATH }}
+        run: |
+          ssh -i ~/.ssh/deploy_key "$USER@$HOST" bash -euo pipefail << EOF
+            cd "$APP_DIR"
+
+            # La révision courante est notée avant tout changement : c'est
+            # elle qui sert de point de retour si la nouvelle version ne
+            # répond pas.
+            PREVIOUS=\$(git rev-parse HEAD)
+            echo "Révision actuelle : \$PREVIOUS"
+
+            git fetch origin main
+            git reset --hard origin/main
+            echo "Nouvelle révision : \$(git rev-parse HEAD)"
+
+            # --env-file en plus de env_file : le premier alimente la
+            # substitution des \${VAR} dans le compose lui-même (mots de passe
+            # des healthchecks), le second injecte les variables dans les
+            # conteneurs. L'un ne remplace pas l'autre.
+            docker compose -f docker-compose.prod.yml --env-file .env.production \
+              up -d --build
+
+            echo "Attente de la sonde de santé…"
+            for i in \$(seq 1 30); do
+              STATUS=\$(docker inspect --format '{{.State.Health.Status}}' linka-api 2>/dev/null || echo "absent")
+              if [ "\$STATUS" = "healthy" ]; then
+                echo "API saine."
+                docker image prune -f --filter "until=168h" >/dev/null 2>&1 || true
+                exit 0
+              fi
+              if [ "\$STATUS" = "absent" ]; then
+                echo "Le conteneur n'existe pas."
+                break
+              fi
+              sleep 5
+            done
+
+            echo "L'API n'est pas devenue saine. Journaux :"
+            docker logs linka-api --tail 60 2>&1 || true
+
+            # Retour à la version précédente : laisser tourner une version
+            # cassée est pire que revenir en arrière, d'autant que les
+            # migrations Prisma sont additives et restent compatibles.
+            echo "Retour à \$PREVIOUS"
+            git reset --hard "\$PREVIOUS"
+            docker compose -f docker-compose.prod.yml --env-file .env.production \
+              up -d --build
+            exit 1
+          EOF
+
+      - name: Vérifier la sonde publique
+        env:
+          HOST: ${{ secrets.DEPLOY_HOST }}
+        run: |
+          # Depuis Internet, en traversant le proxy : la sonde interne peut
+          # être verte alors que le routage TLS, lui, est cassé.
+          for i in $(seq 1 10); do
+            CODE=$(curl -fsS -o /dev/null -w '%{http_code}' https://api.linka.tadjo.dev/health || echo "000")
+            if [ "$CODE" = "200" ]; then
+              echo "Sonde publique : 200"
+              exit 0
+            fi
+            echo "Tentative $i : $CODE"
+            sleep 6
+          done
+          echo "La sonde publique n'a jamais répondu 200."
+          exit 1

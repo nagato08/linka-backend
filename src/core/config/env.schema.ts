@@ -74,6 +74,19 @@ export const envSchema = z.object({
   NOTCHPAY_PUBLIC_KEY: z.string().default(''),
   NOTCHPAY_PRIVATE_KEY: z.string().default(''),
   NOTCHPAY_WEBHOOK_SECRET: z.string().default(''),
+  /**
+   * Déclare qu'un déploiement est censé encaisser des paiements.
+   *
+   * Vrai par défaut : oublier les clés en production reste une erreur, et le
+   * démarrage doit alors échouer plutôt que de laisser croire que la
+   * monétisation fonctionne. Le passer à false est une décision explicite,
+   * pour les environnements où elle n'est pas encore ouverte — l'ouverture
+   * d'un compte marchand exige un RCCM, qui peut prendre des semaines.
+   */
+  PAYMENTS_ENABLED: z
+    .string()
+    .default('true')
+    .transform((v) => v !== 'false'),
   /** Base publique de l'API, pour construire l'URL de rappel. */
   APP_PUBLIC_URL: z.string().default('http://localhost:3000'),
 

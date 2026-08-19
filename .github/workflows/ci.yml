@@ -1,0 +1,119 @@
+# =============================================================================
+# Intégration continue
+#
+# Tourne sur chaque push et chaque pull request. Le déploiement, lui, vit dans
+# deploy.yml et attend que ce workflow soit vert : livrer du code dont on sait
+# qu'il ne compile pas coûte bien plus cher que d'attendre trois minutes.
+# =============================================================================
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Un push qui en remplace un autre annule la course précédente : sur une
+# branche active, seule la dernière version mérite qu'on dépense des minutes.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Lint, build et tests
+    runs-on: ubuntu-latest
+
+    services:
+      # Redis suffit tel quel. PostgreSQL, lui, exige PostGIS et pgvector :
+      # l'image officielle ne les fournit pas, et `services:` ne sait pas
+      # construire une image. Elle est donc démarrée plus bas, à la main.
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql://linka:linka@localhost:5432/linka?schema=public
+      REDIS_URL: redis://localhost:6379
+      S3_ENDPOINT: http://localhost:9000
+      S3_ACCESS_KEY: linka
+      S3_SECRET_KEY: linka-secret
+      S3_BUCKET: linka-media
+      S3_REGION: auto
+      S3_PUBLIC_URL: http://localhost:9000/linka-media
+      S3_FORCE_PATH_STYLE: 'true'
+      # Valeurs jetables, valides au regard du schéma de validation : le boot
+      # échoue volontairement sur un secret absent, y compris ici.
+      PHONE_HASH_PEPPER: ci-pepper-de-test-0123456789
+      FIELD_ENCRYPTION_KEY: '0000000000000000000000000000000000000000000000000000000000000000'
+      JWT_ACCESS_SECRET: ci-access-secret-0123456789
+      JWT_REFRESH_SECRET: ci-refresh-secret-0123456789
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Installer les dépendances
+        run: npm ci
+
+      - name: Démarrer PostgreSQL avec PostGIS et pgvector
+        run: |
+          docker build -t linka-postgres-ci ./docker/postgres
+          docker run -d --name postgres-ci \
+            -e POSTGRES_USER=linka \
+            -e POSTGRES_PASSWORD=linka \
+            -e POSTGRES_DB=linka \
+            -p 5432:5432 \
+            linka-postgres-ci
+          # `pg_isready` répond avant que la base accepte réellement les
+          # connexions applicatives : on attend une vraie requête.
+          for i in $(seq 1 30); do
+            if docker exec postgres-ci psql -U linka -d linka -c 'SELECT 1' >/dev/null 2>&1; then
+              echo "PostgreSQL prêt"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "PostgreSQL n'a pas démarré à temps"
+          docker logs postgres-ci
+          exit 1
+
+      - name: Générer le client Prisma
+        run: npx prisma generate
+
+      - name: Vérifier le linter
+        run: npx eslint src prisma --ext .ts
+
+      - name: Vérifier le formatage
+        run: npx prettier --check "src/**/*.ts"
+
+      - name: Compiler
+        run: npm run build
+
+      - name: Appliquer les migrations
+        run: npx prisma migrate deploy
+
+      # Le schéma est comparé à l'historique des migrations : une migration
+      # oubliée ne se voit qu'en production, au moment où le conteneur monte
+      # sur un schéma périmé.
+      - name: Vérifier que les migrations couvrent le schéma
+        run: npx prisma migrate status
+
+      # Aucune suite unitaire pour l'instant : la vérification s'est faite
+      # jusqu'ici par des scripts d'intégration lancés à la main. L'étape est
+      # néanmoins câblée pour que le premier `.spec.ts` ajouté soit exécuté
+      # sans rien reconfigurer — et `--passWithNoTests` évite un rouge
+      # permanent qu'on finirait par ignorer, ce qui masquerait les vrais.
+      - name: Lancer les tests
+        run: npm test -- --passWithNoTests

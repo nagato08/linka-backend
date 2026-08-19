@@ -55,9 +55,9 @@ interface NotchPayResponse {
  *
  * Retenu pour son implantation locale et son ouverture de compte marchand
  * accessible. Attention : elle exige un RCCM, donc une société enregistrée.
- * Tant que ce n'est pas fait, ce service refuse simplement de s'initialiser et
- * la monétisation reste inaccessible — ce qui est préférable à des paiements
- * qui échouent silencieusement.
+ * Tant que ce n'est pas fait, la monétisation reste inaccessible et le
+ * déploiement doit le déclarer via PAYMENTS_ENABLED=false — ce qui est
+ * préférable à des paiements qui échouent silencieusement.
  *
  * Commission de l'ordre de 2,5 à 3,5 % par transaction : c'est ce qui rend les
  * gros packs de pièces intéressants pour les deux parties.
@@ -78,9 +78,20 @@ export class NotchPayProvider implements PaymentProvider {
     this.webhookSecret = config.get('NOTCHPAY_WEBHOOK_SECRET');
     this.callbackUrl = `${config.get('APP_PUBLIC_URL')}/api/v1/billing/webhooks/notchpay`;
 
-    if (!this.isConfigured && config.isProduction) {
+    // L'échec au démarrage ne protège pas contre l'absence de clés — chaque
+    // appel la rattrape déjà dans `request()`. Il protège contre le fait de
+    // croire que la monétisation fonctionne alors qu'elle est muette. Couper
+    // PAYMENTS_ENABLED est donc la seule façon de lever le garde-fou : une
+    // décision consciente, jamais un oubli.
+    if (
+      !this.isConfigured &&
+      config.isProduction &&
+      config.get('PAYMENTS_ENABLED')
+    ) {
       throw new Error(
-        'NotchPay non configuré. Les clés sont requises en production : sans elles, aucun paiement ne peut aboutir.',
+        'NotchPay non configuré. Les clés sont requises en production : sans elles, ' +
+          'aucun paiement ne peut aboutir. Passer PAYMENTS_ENABLED à false pour ' +
+          'déployer sciemment sans monétisation.',
       );
     }
 
